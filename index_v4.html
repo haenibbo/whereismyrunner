@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JTBC 서울마라톤 풀코스 · 지점별 도착 시각 (v4)</title>
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: "Malgun Gothic", "Apple SD Gothic Neo", sans-serif; color: #1f2937; background: #f3f4f6; }
+  header { background: #111827; color: #fff; padding: 14px 20px; }
+  header h1 { margin: 0 0 10px; font-size: 18px; }
+  .controls { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; }
+  .controls label { display: flex; align-items: center; gap: 6px; font-size: 14px; }
+  .controls input { padding: 6px 8px; border-radius: 6px; border: 1px solid #9ca3af; font-size: 15px; }
+  .controls input[type=number] { width: 64px; }
+  #summary { font-size: 14px; color: #fbbf24; font-weight: bold; }
+  main { display: flex; height: calc(100vh - 100px); min-height: 520px; }
+  #mapPane { flex: 1; position: relative; }
+  #map { width: 100%; height: 100%; }
+  #mapMsg { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; text-align: center; padding: 24px; background: #fff; font-size: 14px; line-height: 1.7; z-index: 5; }
+  #legend { position: absolute; left: 10px; bottom: 28px; background: rgba(255,255,255,.94); border: 1px solid #d1d5db; border-radius: 8px; padding: 8px 10px; font-size: 12px; line-height: 1.6; z-index: 3; box-shadow: 0 1px 4px rgba(0,0,0,.2); max-width: 190px; }
+  #legend .row { display: flex; align-items: center; gap: 6px; }
+  #legend .sw { display: inline-block; width: 26px; height: 4px; border-radius: 2px; }
+  #legend .course { height: 8px; background: #e11d48; border: 1px solid #fff; box-shadow: 0 0 0 1px #e11d48; }
+  #legend .stn { display: inline-block; width: 12px; height: 12px; border-radius: 50%; background: #fff; border: 3px solid #1f2937; margin: 0 7px; }
+  #legend .sep { height: 1px; background: #e5e7eb; margin: 4px 0; }
+  .pt { position: absolute; left: 0; top: 0; transform: translate(-50%, -100%); text-align: center; white-space: nowrap; pointer-events: auto; }
+  .pt .tm { display: inline-block; background: rgba(17,24,39,.92); color: #fff; border: 1px solid #fbbf24; border-radius: 4px; padding: 1px 5px; font-size: 11px; font-weight: bold; }
+  .pt .dot { display: block; width: 10px; height: 10px; margin: 2px auto -5px; border-radius: 50%; background: #f59e0b; border: 2px solid #fff; box-shadow: 0 0 2px #000; }
+  .pt.first .dot { background: #16a34a; width: 14px; height: 14px; }
+  .pt.last .dot { background: #dc2626; width: 14px; height: 14px; }
+  .pt.hl .dot { border-color: #06b6d4; box-shadow: 0 0 0 3px #06b6d4; }
+  .pt.hl .tm { background: #0e7490; }
+  .low .pt:not(.major) { display: none; }
+  aside { width: 340px; overflow-y: auto; background: #fff; border-left: 1px solid #d1d5db; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { position: sticky; top: 0; background: #e5e7eb; padding: 6px; text-align: left; }
+  td { padding: 5px 6px; border-bottom: 1px solid #f0f0f0; }
+  tr.row { cursor: pointer; }
+  tr.row:hover { background: #cffafe; }
+  td.t { font-variant-numeric: tabular-nums; font-weight: bold; white-space: nowrap; }
+  .note { padding: 8px 10px; font-size: 11px; color: #6b7280; line-height: 1.5; }
+  @media (max-width: 800px) {
+    main { flex-direction: column; height: auto; }
+    #mapPane { height: 60vh; flex: none; }
+    aside { width: 100%; max-height: 40vh; border-left: none; }
+  }
+</style>
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script>window.maplibregl||document.write('<script src="https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.js"><\/script>')</script>
+</head>
+<body>
+<header>
+  <h1>JTBC 서울마라톤 풀코스 · 지점별 도착 시각 (광화문광장 → 올림픽공원, 42.195km)</h1>
+  <div class="controls">
+    <label>출발 시각 <input type="time" id="start" value="07:30"></label>
+    <label>페이스(1km당)
+      <input type="number" id="pm" min="2" max="15" value="5"> 분
+      <input type="number" id="ps" min="0" max="59" value="30"> 초
+    </label>
+    <span id="summary"></span>
+  </div>
+</header>
+<main>
+  <div id="mapPane">
+    <div id="map"></div>
+    <div id="legend"></div>
+    <div id="mapMsg"></div>
+  </div>
+  <aside>
+    <table>
+      <thead><tr><th>km</th><th>지점</th><th>도착 시각</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <div class="note">
+      · 모든 구간을 같은 페이스로 일정하게 달린다고 가정한 계산입니다(오르막·내리막·급수 시간 미반영).<br>
+      · 빨간 굵은 선은 첨부한 코스 이미지의 선을 읽어 실제 도로 위로 맞춘 것입니다. 지점 위치와 코스선은 실제와 수십 m 차이가 날 수 있습니다.<br>
+      · 지하철 노선·역은 서울 도심·강남·강동 일대(위도 37.48~37.60, 경도 126.95~127.17) 범위의 1~9호선·우이신설선을 표시합니다(OpenStreetMap 자료 기준, 그 밖의 노선은 빠져 있습니다).<br>
+      · 지도: OpenFreeMap · © OpenMapTiles · © OpenStreetMap contributors (인터넷 연결 필요)
+    </div>
+  </aside>
+</main>
+
+<script>
+// ===== 데이터 =====
+// 코스선 (경도·위도 차분값을 base64로 압축)
+const COURSE_B64 = "zICODOjTygMTsQJVbX55LTcBwwE3KThtAE8VY1IxO2kA3wETdycAKENPQzZPUyMGdxs5RSMSZSdvK6kBLgVSEVwAxAE0gARkbCQmUApaRD4XUnO4AV80L1o9ShdeGDKcASz2AwBWJ24GVgd2AHIOXgBkKMwBBGQexgFkzAEIZiNqM9wEID46DAAxDJ0BACUUhwctZxLLAQNjCJMDApEBjQELRBJIOVwGTAmIAXY6tAEZdDCeAjd0GlgxzgEDXjaUAQRKM1ouZhuuAh7GBSpieGQkZhCuAgB6O4oDTGIPYh+mBgbeBBr4AwmoBgy6ATJiKHQUaipmMERYzAFacBx4CIoBCWYL1gEqzgE5QH08EVMYR4IB0wE8WyFrDzsGfQxpAWkRrQFDgQEiUStpDM8BFVlDgwEBQydtHMEFDWMCRwhrLZEBDTs4pQEjWQQ3MWMJaxpjEZcDHq0CA5MBHjtAvwUpxwEFZQrDBRvvBzWNBwVjIF0VmwMJZzUBTQERnAEGzAENdh5yAGYTeCpeFkw8wgUGlgMMyAEYkgMUygEFZAygAxZYI2AObCysBjKmBhiwAgFiBm4DUjpkFnoTZB5sFkw2Yhj0A5QBagNiPmQJ4AE8VD7gBNIBggJoHgxeB2AM1AE7iAOxAWwVhgsQaBH2Awq4Ag24BccBYDe6An2UA7kBxAGJAdwBY3ZJtgFL7AODA6IDswJMadIBlwFuR1xLYEV2L2A9YjFoG7QCL8YBKbgDNaIFWV45+AND7AFPkAJrbAnGAUnQAVNaSc4BTWwJXCU0MxQHICE7Rw5ZSG1RlQFbH3m9ARtRKE/FAaUDOY0BmwLjAzdRayl7rwEXTSRjkQG3Ak1LJ1lbMUelASFxS6EBBicoMS5hjgN9qAm1AoIFmwFmMVgROF1SUbgBzwNWlwGwAesBGGVmOTBNCWFcRUxrfosBWEdKS4gG6wecAcsBLlU4UyBVUFNgOfoBvQLEAYUCbEdypQHkAZ0CUG3MApEDlAK5Ag81JCV9ZUFFVzddLckBSckBOckBE9sBBAAQuQFIOU2NAUTJAQDJAQ5jK19IWwBpQT8oYytdNSNlyQHvAW09IWFpMR1viQGjAVlHjwEbJS8AGdsBQVFFaT0pDhEIcTldE68CaXMzTxhjGU8Wf1+bAlFzLa0CV2ktRYMBdyNpO5kBLdQHoAJsOqIDggGcASnMARtgGbICX1QzdhUiV7wBO4IBKtAEzQGSA32mBosCaCteOXIvckELOxIZpAEFjgFNQAdiDtwBDmAyVFxIFsoCYmotNk6CATxoIIoBNWQgVkDOAUJSQiIK8ATGAYwBGUxmchhuAGI0UEaAARZkKpIBZI4BTGwilgEUbDoVWtwDwAJoZDwuTFJmQkBYYj4IZCZEHmJYTjRSkgGCAVJuE1oCWFgsSF5wrgFSShIaXooBGFxYSgZIJk4SWjhODl5aOAFajAHMAUIwYFacAdwBRDQVOkwyVrYBElBFbDaWAWJSZBgyIAoFF3tH7wErT3ehAQVhMU9lMUdZVUm3AYEBZ5UBH0kNpwEfRSdLKSUBChcKBC47DWMOgwEGYwVhBlsiXzBTRHMmxQFQnQFdWyIXJm8a";
+// 지하철 노선: [노선코드, 이름, 색, [선 조각들(base64)]]
+const SUBWAY = [["1","1호선","#004A85",["0I2PDMb+ygPDBf0HyQOLBWuFAXNrkwFn2QWFA/MBkwF9X3VpZWdBUQ==","sPaODILnygM0Qg==","sPaODILnygONAZUB8wGTAr8CswKDAV2NAUurAn9JGZECU6kBK+cF7wGZARtzC38G4wI+xQEKkwEHnwEXzQNl1QbtAbEDgwG1BNkBywXzAdsDf5EEmwGdBrsBZw3dCh+9CVGfBBGxBy2zDBVZAncUUwRbEVEnSUEfOQknBlc4nQEcjwET2wMda+UBuwRPfW2BAXOfAZ0C6QI1gwExwQEj9QEd1wIx8wE5uQEXlwEA/QcHowIM9wYh/QIh6QEZbTuPAUttQ01RSbcC/QG5CJEG3QXvA8UBjwGZAX+DDtkM","sNSNDIT7yQOEDtoMmgGAAcQBkAHiBfADwgiaBtQCmAJiZFZ+HjwuigEk0AEW5AEIzAEFkgcQpgIBxAcYvAE62gEWmgESiAI0kAMunAEyggFOiAHwAZwCogKMA74BvAMofhw8FmAKqAMNZk/gAQVQJFw2Olw4Thg4CLIBFagBBf4LDM4MSs4ITIgLJMYGwgGYBJ4B5gOEAcQF8gHkAo4B2AFMrgOEAbwHjgLEAkS8ARyEAQr6AQ3aAjVuAaQBEnwY4gmOA64CiAFoQpYBbqIC7gFiZMAC5AJ8mgGiAZ4BfGaAAVr4AZgBwgWEA14+eGSYAcIBsAXsB6ADxgQ=","7NSNDOL6yQPyDvINxAGQAfgBngG4A7ICvgF4yALwAQ==","tOyNDLiOygOPA4UCgQK1AfkBmwHBAY8B8QPNA7sD3QOFA/kCkQTpAw==","1PiNDP6wygMyzgEDkAI=","1PiNDP6wygMVjQEDcQi7ERejAiv5ASt1V5EBYW87M48EiQOpD4ULoQ7BDA==","+NONDKz7yQOiDsAM7AKMAvYBqgHiA64DSDreCuoHPjg8TE6GASyEARRkHPYBCrgDB64KCrQB","uviNDP6uygMFhwM="]],["2","2호선","#00A23F",["sOKNDOrByQOpBNoBrwJqYxaVBUI=","zMePDID5yQObAYsB1QFT5QJxjwSLAfUCR5MEK70GU40QOLUHkQG5CtsBwQJX6QFNzwelAukCc58g5QnFDsEEmR/BCYEDf2FHPUkTNxuNAaUB+wdJvwEpSTc/TzNPI9sDdf8CId8HvQI=","zMePDID5yQOMAZYBUpYBHFgSVAKGARVuJ3D7AqYFmwLGA88LkBI/WEtGRTKxAVxdHnEWfQaJAQlXD4sI/QGlAQNlEJUP5gOjDugE6xeWB8EDmAFvLFcwNTA9Sj2GASP6AQ3IApMB/AZL6AQ/bHtigQE8nQEgsQEG9QUPWQpXJocD+AGjBt4C4wJcfxLpAxKdBW7rAQbnAQnTAyXXBmOPAQqPARzhA6ABXRq9BYYBoQIatQcfzwpHtQ1BtQUAgQEFNwszEy8hKyulAekBLSm3Anv9AVPXCaUCbyvZCKMFTyfHAT17EX8B7wMe6QpX","wuiODLzSygORBawCrwJQkREbPwhbIA==","wuiODLzSygPeA9EBqAFXbldYY2SJAR4xTrsBGpEBGlXkAv8EpAHdAlCVAaIB5wKGAYsCFmkchQIYwQIHgwFppQLvApkHE2ECNw4xPlUkIS4bpAStAbQEpQE=","yvuODIKoygONBJoBlQE4OygxLjNaCzgKTKQDpgg6tgEGggEXxAIhpgIleme8AZMBzgKNAqYE3wKEBRtKF5YBT8IBaZoBb4QBb1qpAVjvCP4DrQJU2QsZvQUDPQY1EKMDvAE=","tJqODLbCyQPiB74C/AIk4AN2OBhiPDY8SJIBLHo=","3tWNDI7FyQOUBUNkFbICaawE2QE=","8NCNDLS6ygOKEIQB8AMdggECfBLOAUBQKNYIpAVwLNgJpgLuAUymAnAmEjIwfroBUFgyIjAUNAqAAQa0BQG4DUTyEGiUAQJ+BaIBE74FhwHABLUBkgEbkAEHhAEK1AVW1gMo5gEI6gEFngVr7AMRfhHkAl2kBtsChgP3AVwjWgv2BRCwAQOeAR+CATt6Xz5pFocBNt8DkgH7Bg7HAib7ATRzIjFcWVoxWiXYA58B7BeVB6YO5wSUD+UDaA9MAVwGWBC2B+4BVhCMAQp6B3ITXB2yAVlqUSQlaJMBhgzlEsABtQL6AqMFNJ0BCnkDRy+pAU2TAUNPjwGJAVNB1QFV4QJxkQSFAe8CSdEKgwGPEDi1Az+5DqsCeRm7A3mrBdUBhQXXAeUUpQa/LNcNtwnpAqUGgwIpFVdPLUUlsQGjAfcH"]],["3","3호선","#ED6C00",["+NaNDITkygN21QFKswEiI6wC9QHMA8kDdnvMAfEB0gX9BEQZMguSAgdmCHYc/gP2ATQUiAJMTCr0AcABmgFWQhCEAQS4Ag++AinCBCuuAQWwBRyqAwdWCGIgygKCAZgChAF2KkwOtgEITAluJTAbRmUaN84BuQWaAdkDCtsBngG/CjyBAUxTWlWkAW1qKX4dqgEXqAahAegBJcgBF24BngISdgDUAS3uAY0BiAF78gKNBIAE7QTkAssDdIUBqAHXAiBlFG0UiwIkwQIWW1jHAdYL8xCUAbUB6AOxAzZJFC8SXWOzCg0hGRsrGdEDxwHlCM0DyQXtAacE6QH9C+cFc0dHPTtLNWMVbQOpAQ5XqAHLAu4BjwREeXBxiAFbOB3QBNMBZi9+W2JxKlWMAYMFSN0CvAGZCBpDQnGeA5UFVmM6H5IBLYgBBcwlmgXuASqUATL6BqID6Aj2A4oMygW6CpYD9ASOAaYBDJ4BCaIBG4oCRXgtYjtwazRDngHJAv4E9QpAgwIsaWSTAVg/WCmEAkPSASPqARGKAQHEAQq4CH5oJDAeQjSmAboBtgGWAXxWfj7gHq4J8AbQA1xKfng8UuoC8AVYfowCngI=","hNeNDIzkygPIAYkDPkOGAtUB0APHA8QC8wLKBfsEcCGCAgNuCnQmugSEAvQBRFwq7AG8AZwBWkwOhgEGugIRvAInvAQtrgEFpAUiegKIAgtkBoQBJMoCepYCiAF6LuIBGEYDUA9oKSwdSGkWNcgBtQU6mwFevwIM3QGiAaEKHk0yS7oBswFIM4wBR4IBJ6YBGaICO+wFhwHEARlsAaICEHQAWA+EAR/wAY8BigF7KjN4uQHSAZsCgATtBOYCzwNygQGsAd8CJGcQbRCNAiS/AjzDATRnyAqbD4gBzQFadxwhigF/+gLNAjhLFC8SX2O1Cg8hGR8tGdEDxwHnCM0DyQXtAaUE6QH9C+cFcUVHPTtLM2EVawOpAQxVqAPVBkZrWGmgAW/yBOsBjAFBaFNcdSRT2gHlB7QBlwgcQ0BxngOTBVZjNh2SAS2EAQXMJZ4FhAIyfCr4BqQD6Aj0A4gMygW+CpYD9ASOAaoBDKABB6IBH44CRXgrZjtybzRFIDvCBesLQJsBUMECMl1EWzQnWi1gJ8QBLdYBG94BDeQCDMYCKvIERHwYUBpELDw6ygHcAXZYrAFqYjKYBJYBxBqKCOYFhgOIAUpaSn54Ok7mAuwFWoIBkgKiAg=="]],["4","4호선","#009BCE",["0suODOSBywPtBP0IOU2dBOEDsQGPAYMBRUMbhwEftQEVgwEbTxm1BeEC4QetA48CZccBV4sBWUFDb5cBDT8CLzSNAkKDAh6/Ahz7BAxPIlsmOUAtsgJZajfcAd0BoAO/Aw==","/IiODPTByQMw2gY+0gY82AIGxgEVqggOUnTOAhKcAS2SAVeAASUsuQGUAT9CPVBZqAEhhAELeh62AVyoAuYDrg4KigEE+gIPYjNoHSZFKoEBNN8MgASxAljlAj5ZKqMEsAI9OiEsMV4bWABYCkQQMDJYigOGA/gFmAbOAvACGjoKUAcwxQOgDR2mAwWaA0LSAnyGBACIARF6DFgKJjhqOjTuAWCuATyUA5wBXDx8elxGRCDWAmzYAXJgImwQ7Al2ZAGcAhvoAgN0DIgQ5gO2AjzUARZwMDww8AGeAjZOjAGEAiB2GIwBCHgDJDOaAYcBxgGXAa4B","5suODN6BywP5BPsIOU+dBOEDcVmfAWdtL4UBIbUBE6sBJycPswXhArUG9wKbAUOhAlfHAVWHAVt3iQEzTwlRLqMCQoMCIMECHpsFFFUYMzZHKhmuAlduO1RLqATRBJgBrwGGAcEBLnMSWQdrI8UBKW2nAakCjQKtAjsjXyvTARe1AjuPEOUDZwfvAgCbAhplAeUJb2kNXyHbAXXRAmdBHzMhowGdAVs7kQaxAicXKys/fwclAGEckwEBPZ0BoQUhtQEDmQMcpQPIA50NCC8FUR9DzQLrAvkFlwbrAucCQ2MZPQeXARpXMlleY6AEswJWJUoRngIrtAJX4gz/A4QBM0YpIikyZxBjAfkCC4kB5wOzDlefAh+5AQZ1ED0UQy5jRmlka7oBkwEmJ26pAR53E5cBcc0CD00WqwgFkwEPowEr5wEt1wQr+QUF2wI="]],["5","5호선","#794698",["npSQDPDZyQP/BJEDQRmdBx5FDocVmAvrB5wFvQGeAU9sEUQIbi6IAeoJmA+uA4oFJkayAfYD5ATmDB5OUJIBLngCYBE0L14rPlFOgQFMyQFU5wyCBIMCRvkEzAF/ND8goQOMAqMC2AF7PPEO/gPzAQ13DOEBOrkCXo8PoAX/AowBcUSpAZQBKTq5AfAClwGqAecD6AGpCoIEqwvCBNkCeKcJqgHnBXCVA0hJItsBngH1C+QIazAzDDcENQc3EZUBResIrQW9CK0G6QnrBd8H4wO7AVO1AT2BAiFjA0EE1QJGswFYmQGAAVWOARVcR8wBXaoBkQGGAYMBUqME0gG/AWaZAXyLAvgBXUCPAVBhLs0BQKsBIrUBErkGNy8EjwEslQFYa3YTTCvcAyWwAg0oM0ZhTDUi3wFepQJgrQEw0wEghQIOnwMD0QMKoQVvpQNR+QkCsQE7mQFZ2wX9A9sBywGjAqsC9QHHAo8CkwOXAsMD5QbJBUFBvQXrCukBlQPvA50FywH1AQ==","kvKPDMaaygP3BeYB/wFG6wOYAZMCajccmwOMAqkC3AF9PPUOgAT5AQ9zDtsBNr0CYo0PngX9AowBb0SpAZIBIzS5AfACmwGwAesD6AGpCoQEqwvCBN0CeKcJqgHlBXCRA0RLJtkBmgH1C+QIbzA1DjsENQk5EZcBRXNDgwbZA/MBjQG/CK0G5wnrBdsF0QK1A9sBey+DAR2hAhlBBM0CQK8BWJkBflOKARVcR8wBXa4BkwGIAYcBUr8E5gGjAV6JAXDdAdYBMyZjQMEBaIECUrEBJLcBFLkGN2kUTRqRAVZpdhNIIdoDL7YCIUoxOIEBVnc8cy6ZAlihAk5jCr8BCPEDAQ==","gteNDIakygOUA/oDqAKYA+gBlgPABe4KRkTGBrwFKi6GAqQDkgKSA/YBygKoAq4C3AHMAZgGogRiNrQBOvoJAKYDUqQFctIDBw==","0KOQDMS5ygPwASyWBEg=","4KyQDPK6ygOMAQD2ARA=","4KyQDPK6ygPjAh+rDO0B5wq9AVUGlQSSAV0QkwEIgwENbxtRHVEpZVMzOzVLI1UjrwEn7wKbAfUGK48BxwXfDjlhSVFrSS8VZRV/CzkEOQqhASzzBpYCiANzygN9igErdC92SWJRWIsBEDUSfxdNd9MBJ2EvjwGTAe8C1QTHDCdJkw2fFC+DAQVrDkFOab4BmwHuB5sFiBWVCz4LnAcdQBr8BIwD","tK+QDPC6ygOrAyPdAinZC8UB6QrFAVcKkwSKAV0UVQZ9A28RiQEnRSVhSUFBM00nTyGzASfvAnvfBR+XAS2PAcMF4Q5jlQFVRW89nwEhgwEA4QE2"]],["6","6호선","#7C4932",["sMuNDKKsygOwDqkG0Ab7AtwD3QGCBYcCugSdAbgDa5QHlwKCBKUBwAFdugF3KAtEC5APSKgBJXYnZC9+JfwNbGgMNg42GKABcIoBcHZwmAGuAVJyLoYBDoYCOqADGY4CBEAmsAE4jAFsiAGEAXxSOogBSsYClAF0UCwuvgTEB06KAUysAeYEngiwA/oFLvYBA9YBJ8YCK6QFHdgCENYCa9wIBJwBTMQCLEpYTNgBogGGAVDoBOQBThjCATD2ASDCAi20AwGaCCgoDrQEsAQaMDqUAhCyARx4mgHMAfgCvgWMAs4EggHuAQ==","xuWODNr/ygOHAfEBiwLHBPcCwwWbAc0BH3knuwIhiwERKa8ErQQnDZkIJa8DAsMCMPUBIcMBLUsXYSmJBLsBhQFR1QGdAVdNMVFLwQIBmQFq4QgV0wJQ+wcowwIE1QEt9wGtA/cF5wSZCJ8BrwKZBIUHMUdNRW0/pQJ5gQFNvwGbAXWNATV5JXUXdQMxFrcBBJ8BJdsCC4UCL4UBUXGVAakBdW+JAW2fAW8zFzUNZQv5DWt3JF8wdyqtASbFDkGTAQzTAXzDAWL/A6QBlweYArkDbq8EmgGFBYgC3QPiAc0G/AKtDqYG"]],["7","7호선","#6E7E31",["sqOPDJL+ygOsBYcDMB94b2BpJmWaA70M4gG3BhqtAQFtL5sCM9cBxwKZCWOvAglhBrsCCcUCsQ29GKsB4QJzjwKnAaECvwKFBJcF/wrBC4cZpQHbAWNZYTvPBqEClQeTAZcRnQOjCeUC1xXXBrMPywTDAmc3I0FBtQKbAzEzRytnMcEDpwFRMVE/aWUnM0GRASWNAXWhCFPJAV+zAccBmQLdAfcClQGfAV9JvwFV9Qq9A8UBL4UBFYMHb/kBFeEJlQNlF08HaQRtDDUMswFMIxhHQkkmiwOYATkknwWkBPkBlgGJDNYFiQFYQT6tAuoCd4QB8QPQBJcGlgc=","rKOPDKj+ygNaO+IE1QJYRa4BvQFCzwH8AtMLhgG7A2jzAhJbDE8Cfz2bAv8C8wphpQILYwa7AgvFAuELtxXRAYcDpwHhAnOPAqcBoQK/AoUEmQX/Cr8LiRmRAcMBMzlDN2U90QajAvkMpQKxC4sCownjAtkV1waxD80EwQJlNyM/P60CnQMvL7MBaZMDkQE5HacBeTkzRVcrTSuNAQk9baUIZ+EBUZkB8wHhApMB/wGFAaUBTUOfAWF/L+sKqwPFAS+FARWFB3H5ARXfCZUDZRdRB2sEbQw3DrUBTCMYR0JHJosDmAE7JJ0FogTlAsoBnwukBU8wOSpDPv0K4gw="]],["8","8호선","#D11D70",["qIKQDLr/ygOIAocDFj8IMwM5EzEhPz1JrwT7A5kBrQE7VS9bJV0HNwDjCBLZCiLzArYCnxEac3C3BVCfBAJJG4MBPWkrK0ExWS15L8ECWXMVlQEPrwEAnQIicRZJCIcBAXMRYSNXMW9fM2WRAfMCyQT3DOMC0werAfUD7QLtB7cBqQT7ApcFsQPBBGurAaUByQJv0QI9hQEzVZsBqwFZRSkRpQrBA58F/wFrPTMrNY0BA4MBGqUBDiGcAdcBVFdIPzAdqgGFAW5vghHjEuwDhwTaAZMCngHtAXzTAe4C5QXIBe8K","/O6PDNq1ygPFB8cUqwH1A+0C7Qe5AakEtQKJBd0B/QKLAbkBgQL3AkNxffcBM4kBUZUBJTlJUWNhWUvTCskDmwWDAm8/LSMTIRlNC2MKgwEeeZgBzwGiAZsBhgFZRDl2d4YR7RLsA4kE3AGTAp4B7QF80wHuAucFxgXtCg==","/O6PDNq1ygMcdHa8AlBYQDBULlwgtAEYqAEN4gEh0gEVygEMrAEc1AJi0gFYRC4uMD5yGoQBAFAfiAKdAdwHBW6LAs4PL84BJYQDE8YKAOIIBjYcUj5yPE6MAaYBhAF8rAGOAfQB6AFIUjZmDCgALh10iwKOAw=="]],["9","9호선","#A49D87",["1NaNDNj1yQNgC2QAtAdQuAEAeB3yAWnGATnKAS2KATVgN25ZugL5AoIBf7QBe3I/ygWhAqoBNVoVXguOAgRaDVQZ1AKDAcoGowOAA8kBzAFbYB1yGbABE5IBDtADWs4H0AG6B/4B/g/oBFgQZAJyCW4RdB2iB9UCmAO1AawBXaIBN1YNtgEBoAEOjAJG6gOSAboQggXWG5gIchaeATCsAjzKCLIBqgnYAb4DMFYHYCfMCPUE3APlAcIBb0Q7ND0gSYgB8QMeJx4TjBDRBJ4FsQGeAjGsAQ3uAgHiARiUAjBQErAHsgLwApoBnAFarALMAcQByAHqAtQD+gGaA0BcSVXHAcUCJ1k=","oNePDKD1yQOQAZoChALEA2RwWja4AVqSARqmAQiyARWSASWmAVuyArMCyAF35gFPqAEV9gEDygEsmAFOkgGOAdQEhAdmZIYBQIYBFKwBBZwBK4QH9QJOFbABFVgGjAEeVB5mRnp0HCrcAsIGvAKsBg==","kI2QDPiNygO7AqsG2QK/BhkpJytRR2VDUR2HARtVBa8BFEsWgwf4Ap0BLq0BBIkBE4cBQWll0wSDB48BiwGTAUvFASv1AQSjARbjAVDHAXavArQCqQFckwEoswEWpwEHkwEbuQFXWzdjcYUCwwPHAYcCtwLzA6EBswKPAbMBwwHFAakCywGbAVntApcBrwexAk8TkQIt3wEV6wIAdQjTAR59GqcVggYbFBsmhwHyAyFMMz5DPMMBcNsD6AHJCPYEORxXFCsCvwMvqwnXAY0KzwFrFa0EqQHzHecIhQu1A90EswGBAkOnAQ+zAQRRDJ8BOIUCjgG5AVanCIYDdSBvEHEKYwBbEf0P5wS3B/sBzQfRAc8DWY8BC60BEm8aXR7LAVz/AsoBywakA9MChgFTGFkOjwIBWwpZFqkBNscFogJxPrEBfIEBgAG5AvoCbVxhNokBOMkBLsUBOvEBanseuQEAswdPYwJdDA==","ho2QDPyNygOtAdUD","3taPDLb1yQMlXckBxQJHTw==","9KqPDNbpyQN6GaoDd6QDd3Qp","+PqODMb2yQOBAQl9E9UBPWcn","uM6ODMjpyQPbAk2XASvBAVU=","wr6ODOjnyQNROIsBQlUiYRg=","pruODJbpyQO0AUPkAXE=","vvaODLr1yQPCAlz6ASY=","8KqPDM7pyQO+CLMC"]],["W","우이신설선","#BACC50",["mLuODMr+ygNk8QOSAuMDgAH7A3TZBBYtlgFvLDEMhwIWP/oBsQOIBcUJPoEBDj8SzwM=","7MmODPrXygMN8AMTQscH/g0VqgIbHKUBfhMgFVhx8ARvogONAugDI5IBe+wE"]]];
+// 지하철역: [이름, 경도, 위도, 지나는 노선코드들]
+const STATIONS = [["한성대입구",127.00596,37.58851,"4"],["제기동",127.03447,37.57838,"1"],["회기",127.05762,37.5895,"1"],["노들",126.95355,37.51297,"9"],["신설동",127.02506,37.57529,"1,2,W"],["용답",127.05086,37.56209,"2"],["충정로",126.96291,37.55937,"2,5"],["종로5가",127.00202,37.57099,"1"],["고속터미널",127.00498,37.50508,"3"],["봉은사",127.06024,37.51419,"9"],["언주",127.03387,37.50732,"9"],["삼성중앙",127.05347,37.5131,"9"],["사평",127.01514,37.5043,"9"],["선정릉",127.04386,37.51025,"9"],["신논현",127.02453,37.50432,"9"],["외대앞",127.06374,37.59631,"1"],["구반포",126.98678,37.50129,"9"],["흑석",126.96395,37.50838,"9"],["신반포",126.99642,37.5036,"9"],["암사역사공원",127.13743,37.55705,"8"],["보문",127.01937,37.58527,"6,W"],["동작",126.97928,37.50304,"9,4"],["도곡",127.05547,37.49091,"3"],["동대문역사문화공원",127.00781,37.56514,"2,4,5"],["안국",126.98617,37.57683,"3"],["천호",127.1234,37.53852,"5,8"],["동대문",127.01051,37.57118,"1,4"],["삼각지",126.97389,37.53548,"4,6"],["용산",126.96483,37.52995,"1"],["종각",126.98318,37.57017,"1"],["건대입구",127.07012,37.5404,"2,7"],["남영",126.97132,37.54054,"1"],["동묘앞",127.01655,37.57293,"1,6"],["고려대",127.03601,37.59038,"6"],["선릉",127.04895,37.50447,"2"],["강남구청",127.04129,37.51718,"7"],["강남",127.02791,37.49721,"2"],["가락시장",127.11864,37.49253,"3,8"],["을지로3가",126.99253,37.56634,"2,3"],["구의",127.08622,37.53717,"2"],["강변",127.09474,37.53511,"2"],["잠실나루",127.10383,37.52069,"2"],["충무로",126.99411,37.5612,"3,4"],["약수",127.01039,37.55492,"3,6"],["교대",127.0137,37.49366,"2,3"],["오금",127.12815,37.50198,"3,5"],["한양대",127.04366,37.55573,"2"],["성수",127.0561,37.54457,"2"],["시청",126.97595,37.5644,"1,2"],["을지로입구",126.98262,37.56595,"2"],["을지로4가",126.99817,37.56664,"2,5"],["신당",127.01625,37.56538,"2,6"],["상왕십리",127.02925,37.56439,"2"],["아현",126.95612,37.55743,"2"],["서초",127.00768,37.49177,"2"],["역삼",127.03696,37.50082,"2"],["삼성",127.06314,37.50884,"2"],["종합운동장",127.07496,37.51123,"2,9"],["잠실새내",127.08557,37.51159,"2"],["잠실",127.10014,37.51322,"2,8"],["경찰병원",127.1239,37.4954,"3"],["대청",127.07955,37.49363,"3"],["학여울",127.06988,37.4965,"3"],["대치",127.06319,37.49447,"3"],["잠원",127.01115,37.51275,"3"],["신사",127.01952,37.51611,"3"],["압구정",127.0285,37.52618,"3"],["금호",127.01592,37.54797,"3"],["동대입구",127.00573,37.55906,"3"],["경복궁",126.97353,37.57579,"3"],["독립문",126.95784,37.57456,"3"],["무악재",126.95035,37.58232,"3"],["혜화",127.00195,37.58214,"4"],["명동",126.98638,37.5609,"4"],["회현",126.97842,37.5587,"4"],["서울역",126.97158,37.55412,"1,4"],["숙대입구",126.97196,37.54513,"1,4"],["신용산",126.96786,37.52917,"4"],["마천",127.15272,37.49495,"5"],["거여",127.14377,37.49335,"5"],["개롱",127.13484,37.49807,"5"],["방이",127.12604,37.50864,"5"],["올림픽공원",127.13093,37.51615,"5,9"],["둔촌동",127.13624,37.5278,"5"],["상일동",127.16678,37.55678,"5"],["고덕",127.15646,37.55534,"5"],["명일",127.14408,37.55195,"5"],["굽은다리",127.14296,37.54564,"5"],["길동",127.1402,37.53837,"5"],["강동",127.1326,37.5358,"5"],["광나루",127.10353,37.5453,"5"],["아차산",127.0898,37.5517,"5"],["장한평",127.06457,37.56149,"5"],["답십리",127.0527,37.56681,"5"],["마장",127.04288,37.5661,"5"],["행당",127.02999,37.55761,"5"],["신금호",127.02025,37.55443,"5"],["광화문",126.9769,37.57162,"5"],["서대문",126.96664,37.5658,"5"],["애오개",126.9567,37.55343,"5"],["공덕",126.95081,37.54365,"5,6"],["안암",127.02928,37.58627,"6"],["창신",127.01525,37.5798,"6"],["청구",127.01378,37.56023,"5,6"],["버티고개",127.00659,37.54823,"6"],["한강진",127.00175,37.5398,"6"],["이태원",126.99437,37.5345,"6"],["녹사평",126.98658,37.53492,"6"],["효창공원앞",126.96133,37.53934,"6"],["어린이대공원",127.07439,37.5476,"7"],["군자",127.07956,37.55724,"5,7"],["중곡",127.08452,37.56631,"7"],["용마산",127.08658,37.57399,"7"],["사가정",127.08841,37.5807,"7"],["면목",127.0876,37.5884,"7"],["상봉",127.08559,37.59608,"7"],["숭실대입구",126.95413,37.49569,"7"],["반포",127.01163,37.50817,"7"],["논현",127.02136,37.51098,"7"],["학동",127.03075,37.51396,"7"],["청담",127.05168,37.51909,"7"],["자양",127.06674,37.53153,"7"],["용두",127.03807,37.57407,"2"],["신답",127.04713,37.56972,"2"],["송파",127.11218,37.49972,"8"],["석촌",127.10711,37.5053,"8,9"],["몽촌토성",127.11267,37.51753,"8"],["강동구청",127.12062,37.53069,"8"],["암사",127.12754,37.55011,"8"],["중앙보훈병원",127.14826,37.52828,"9"],["둔촌오륜",127.13842,37.51984,"9"],["한성백제",127.11621,37.51667,"9"],["송파나루",127.1128,37.51125,"9"],["석촌고분",127.09661,37.50244,"9"],["삼전",127.08721,37.50453,"9"],["성신여대입구",127.01648,37.59268,"4,W"],["청량리",127.04463,37.57998,"1"],["종로3가",126.9915,37.57149,"1,3,5"],["이촌",126.97337,37.52271,"4"],["왕십리",127.03643,37.5611,"2,5"],["옥수",127.01755,37.54137,"3"],["장자호수공원",127.13791,37.58741,"8"],["뚝섬",127.04741,37.54724,"2"]];
+// 코스 지점: [누적 km, 지점명, 경도, 위도, 주요지점 여부]
+const POINTS = [
+  [0,'출발 · 광화문광장',126.97638,37.573,1],
+  [0.8,'서울광장',126.97614,37.56489,0],
+  [1.3,'숭례문',126.97503,37.56061,0],
+  [3.8,'을지로 반환점',126.99362,37.56675,1],
+  [4.7,'을지로입구역',126.98308,37.56609,0],
+  [8.8,'베네치아 아파트 앞',127.02239,37.57166,0],
+  [9.1,'비우당교 반환점',127.02562,37.5708,1],
+  [9.4,'베네치아 아파트 앞(복귀)',127.02248,37.57165,0],
+  [13.6,'종로구청입구사거리',126.97992,37.56961,1],
+  [17.5,'신설동역',127.02242,37.57519,1],
+  [19.8,'신답역 지하차도 저점',127.04896,37.56954,0],
+  [20.8,'서울교통공사 앞',127.05686,37.56365,0],
+  [21.7,'장한평역',127.06415,37.56164,1],
+  [22.3,'군자교 고점',127.07169,37.56016,0],
+  [22.8,'군자 농협',127.07764,37.55797,0],
+  [23.1,'군자역',127.07846,37.55748,0],
+  [23.4,'군자 숙성부심',127.07788,37.55504,0],
+  [23.8,'세종대 앞',127.07634,37.55117,0],
+  [24.4,'스칼라또',127.07325,37.54565,0],
+  [24.9,'건대 스타벅스',127.07094,37.54161,0],
+  [25.1,'건대입구역',127.07056,37.5408,1],
+  [25.9,'자양초 앞',127.07897,37.53768,0],
+  [26.3,'자양사거리',127.08341,37.53609,0],
+  [28.0,'잠실대교 고점',127.09303,37.52239,0],
+  [29.3,'잠실역',127.09984,37.51386,1],
+  [29.9,'석촌호수 사거리',127.10328,37.50973,0],
+  [31.1,'잠실학원 사거리',127.09199,37.50776,0],
+  [31.9,'탄천고가 진입',127.08553,37.50226,0],
+  [32.2,'탄천고가 고점',127.08328,37.50121,0],
+  [33.2,'학여울역 반환',127.07182,37.49701,1],
+  [34.0,'대치 지하차도 입구',127.07935,37.49939,0],
+  [34.4,'대치 지하차도 저점',127.08417,37.49806,0],
+  [35.6,'수서IC 고점',127.097,37.49315,0],
+  [35.8,'수서IC 저점',127.09862,37.4926,0],
+  [36.3,'탄천교 고점',127.10179,37.49352,0],
+  [36.9,'가락 지하차도 저점',127.10864,37.49555,1],
+  [38.2,'석촌중학교 앞',127.12205,37.50196,0],
+  [39.3,'센트레빌 아파트 앞',127.12804,37.50996,0],
+  [39.4,'올림픽공원 사거리',127.12929,37.51223,0],
+  [40.5,'둔촌사거리 반환점',127.13475,37.52115,1],
+  [41.6,'올림픽공원 사거리(복귀)',127.12967,37.51265,0],
+  [42.195,'도착 · 올림픽공원',127.12226,37.51432,1]
+].map((r, i, a) => ({ km: r[0], name: r[1], ll: [r[2], r[3]], major: !!r[4], cls: i === 0 ? 'first' : (i === a.length - 1 ? 'last' : '') }));
+
+// base64 차분 압축 해제 → [[경도, 위도], ...]
+function decodeLine(b64) {
+  const raw = atob(b64); let i = 0, lo = 0, la = 0; const out = [];
+  const rd = () => { let z = 0, m = 1, b; do { b = raw.charCodeAt(i++); z += (b & 127) * m; m *= 128; } while (b & 128); return (z % 2) ? -(z + 1) / 2 : z / 2; };
+  while (i < raw.length) { lo += rd(); la += rd(); out.push([lo / 1e5, la / 1e5]); }
+  return out;
+}
+
+// ===== 시간 계산 · 표 =====
+const pad = n => String(n).padStart(2, '0');
+const hms = s => { s = Math.round(s); return pad(Math.floor(s / 3600)) + ':' + pad(Math.floor(s % 3600 / 60)) + ':' + pad(s % 60); };
+let theMap = null;
+
+const tbody = document.getElementById('rows');
+POINTS.forEach(p => {
+  const tr = document.createElement('tr');
+  tr.className = 'row';
+  tr.innerHTML = '<td></td><td></td><td class="t"></td>';
+  tr.children[0].textContent = p.km === 42.195 ? '42.195' : p.km.toFixed(1);
+  tr.children[1].textContent = p.name;
+  tr.addEventListener('mouseenter', () => p.el && p.el.classList.add('hl'));
+  tr.addEventListener('mouseleave', () => p.el && p.el.classList.remove('hl'));
+  tr.addEventListener('click', () => { if (theMap) theMap.flyTo({ center: p.ll, zoom: 15.5 }); });
+  tbody.appendChild(tr);
+  p.tr = tr;
+});
+
+function update() {
+  const [h, m] = (document.getElementById('start').value || '00:00').split(':').map(Number);
+  const startSec = h * 3600 + m * 60;
+  const paceSec = (Number(document.getElementById('pm').value) || 0) * 60 + (Number(document.getElementById('ps').value) || 0);
+  if (paceSec <= 0) { document.getElementById('summary').textContent = '페이스를 입력해 주세요.'; return; }
+  POINTS.forEach(p => {
+    const elapsed = p.km * paceSec;
+    const clock = hms((startSec + elapsed) % 86400);
+    p.tr.children[2].textContent = clock;
+    if (p.el) {
+      p.el.querySelector('.tm').textContent = clock.slice(0, 5);
+      p.el.title = p.name + ' (' + p.km + 'km) · 도착 ' + clock + ' · 출발 후 ' + hms(elapsed);
+    }
+  });
+  const total = 42.195 * paceSec;
+  document.getElementById('summary').textContent = '예상 완주 기록 ' + hms(total) + ' · 도착 시각 ' + hms((startSec + total) % 86400);
+}
+['start', 'pm', 'ps'].forEach(id => document.getElementById(id).addEventListener('input', update));
+update();
+
+// ===== 범례 =====
+(function buildLegend() {
+  const lg = document.getElementById('legend');
+  let h = '<div class="row"><span class="sw course"></span>마라톤 코스</div><div class="sep"></div>';
+  SUBWAY.forEach(l => { h += '<div class="row"><span class="sw" style="background:' + l[2] + '"></span>' + l[1] + '</div>'; });
+  h += '<div class="sep"></div><div class="row"><span class="stn"></span>지하철역</div>';
+  lg.innerHTML = h;
+})();
+
+// ===== 지도 =====
+function showMsg(html) { const m = document.getElementById('mapMsg'); m.innerHTML = html; m.style.display = 'flex'; }
+
+function initMap() {
+  const container = document.getElementById('map');
+  let map;
+  try {
+    map = new maplibregl.Map({ container: container, style: 'https://tiles.openfreemap.org/styles/liberty', center: [127.03, 37.55], zoom: 10 });
+  } catch (e) {
+    showMsg('지도를 표시할 수 없습니다. (브라우저의 그래픽 가속이 꺼져 있을 수 있습니다)<br>표와 계산은 지도 없이도 동작합니다.');
+    return;
+  }
+  theMap = map;
+  map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-left');
+
+  const course = decodeLine(COURSE_B64);
+  const bounds = new maplibregl.LngLatBounds();
+  course.forEach(p => bounds.extend(p));
+
+  // 시각 표시 (HTML 마커)
+  POINTS.forEach(p => {
+    const wrap = document.createElement('div');
+    wrap.innerHTML = '<div class="pt ' + p.cls + (p.major ? ' major' : '') + '"><span class="tm"></span><span class="dot"></span></div>';
+    p.el = wrap.firstChild;
+    new maplibregl.Marker({ element: wrap, anchor: 'center' }).setLngLat(p.ll).addTo(map);
+  });
+  map.fitBounds(bounds, { padding: 50, animate: false });
+
+  map.on('load', () => {
+    // 도로명 글자가 선 위에 보이도록, 선은 첫 번째 글자 레이어 아래에 넣음
+    const layers = map.getStyle().layers;
+    const firstSymbol = layers.find(l => l.type === 'symbol');
+    const before = firstSymbol ? firstSymbol.id : undefined;
+    const labelLayer = layers.find(l => l.type === 'symbol' && l.layout && l.layout['text-font']);
+    const font = labelLayer ? labelLayer.layout['text-font'] : ['Noto Sans Regular'];
+
+    // 지하철 노선 (실선, 노선별 색)
+    const subFeatures = [];
+    SUBWAY.forEach(l => l[3].forEach(b => subFeatures.push({ type: 'Feature', properties: { c: l[2], k: l[0] }, geometry: { type: 'LineString', coordinates: decodeLine(b) } })));
+    map.addSource('subway', { type: 'geojson', data: { type: 'FeatureCollection', features: subFeatures } });
+    map.addLayer({ id: 'subway-casing', type: 'line', source: 'subway', layout: { 'line-join': 'round', 'line-cap': 'round' },
+      paint: { 'line-color': '#ffffff', 'line-opacity': 0.9, 'line-width': ['interpolate', ['linear'], ['zoom'], 10, 4, 14, 8, 17, 12] } }, before);
+    map.addLayer({ id: 'subway-line', type: 'line', source: 'subway', layout: { 'line-join': 'round', 'line-cap': 'round' },
+      paint: { 'line-color': ['get', 'c'], 'line-width': ['interpolate', ['linear'], ['zoom'], 10, 2.5, 14, 5, 17, 8] } }, before);
+
+    // 마라톤 코스 (지하철선보다 굵게)
+    map.addSource('course', { type: 'geojson', data: { type: 'Feature', geometry: { type: 'LineString', coordinates: course } } });
+    map.addLayer({ id: 'course-casing', type: 'line', source: 'course', layout: { 'line-join': 'round', 'line-cap': 'round' },
+      paint: { 'line-color': '#ffffff', 'line-width': ['interpolate', ['linear'], ['zoom'], 10, 8, 14, 15, 17, 22] } }, before);
+    map.addLayer({ id: 'course-line', type: 'line', source: 'course', layout: { 'line-join': 'round', 'line-cap': 'round' },
+      paint: { 'line-color': '#e11d48', 'line-width': ['interpolate', ['linear'], ['zoom'], 10, 5, 14, 10, 17, 15] } }, before);
+
+    // 지하철역 (동그라미 + 이름)
+    const colorOf = {}; SUBWAY.forEach(l => { colorOf[l[0]] = l[2]; });
+    const stFeatures = STATIONS.map(s => {
+      const ls = s[3].split(',');
+      return { type: 'Feature', properties: { name: (s[0].endsWith('역') ? s[0] : s[0] + '역'), c: ls.length === 1 ? colorOf[ls[0]] : '#1f2937', t: ls.length > 1 ? 1 : 0 },
+        geometry: { type: 'Point', coordinates: [s[1], s[2]] } };
+    });
+    map.addSource('stations', { type: 'geojson', data: { type: 'FeatureCollection', features: stFeatures } });
+    map.addLayer({ id: 'station-circle', type: 'circle', source: 'stations',
+      paint: { 'circle-color': '#ffffff',
+        'circle-radius': ['interpolate', ['linear'], ['zoom'], 10, 4.5, 14, 8, 17, 12],
+        'circle-stroke-color': ['get', 'c'],
+        'circle-stroke-width': ['interpolate', ['linear'], ['zoom'], 10, 2.5, 14, 4, 17, 5] } });
+    map.addLayer({ id: 'station-label', type: 'symbol', source: 'stations', minzoom: 11.5,
+      layout: { 'text-field': ['get', 'name'], 'text-font': font, 'text-size': ['interpolate', ['linear'], ['zoom'], 11.5, 11, 15, 14],
+        'text-anchor': 'top', 'text-offset': [0, 1.0], 'text-allow-overlap': false },
+      paint: { 'text-color': '#111827', 'text-halo-color': '#ffffff', 'text-halo-width': 2 } });
+  });
+
+  const syncZoom = () => container.classList.toggle('low', map.getZoom() < 12);
+  map.on('zoom', syncZoom);
+  syncZoom();
+
+  let loaded = false;
+  map.on('load', () => { loaded = true; });
+  setTimeout(() => { if (!loaded) showMsg('지도를 불러오지 못했습니다.<br>인터넷 연결을 확인한 뒤 새로고침(Ctrl+F5)해 주세요.<br>(표와 계산은 지도 없이도 동작합니다)'); }, 20000);
+  update();
+}
+
+if (typeof maplibregl === 'undefined') {
+  showMsg('지도 라이브러리를 불러오지 못했습니다.<br>인터넷 연결을 확인한 뒤 새로고침해 주세요.<br>(표와 계산은 지도 없이도 동작합니다)');
+} else {
+  initMap();
+}
+</script>
+</body>
+</html>
